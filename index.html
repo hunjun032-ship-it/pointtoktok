@@ -1,55 +1,3 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>포인트톡톡</title>
-
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-
-<script src="https://cdn.tailwindcss.com"></script>
-
-<style>
-body{margin:0;font-family:sans-serif;background:#fff7fb}
-.hidden{display:none!important}
-button{cursor:pointer}
-</style>
-</head>
-
-<body>
-
-<!-- 로그인 -->
-<div id="login-page">
-    <button onclick="login()">Google 로그인</button>
-</div>
-
-<!-- 앱 -->
-<div id="app-layout" class="hidden">
-
-    <h1>포인트톡톡</h1>
-
-    <div id="point-text">0 P</div>
-
-    <button onclick="attendance()">출석</button>
-
-    <h2>미션</h2>
-    <div id="mission-list"></div>
-
-    <h2>상품</h2>
-    <div id="product-list"></div>
-
-    <h2>랭킹</h2>
-    <div id="ranking-list"></div>
-
-    <h2>공지</h2>
-    <div id="notice-area"></div>
-
-</div>
-
-<script>
-// ================= FIREBASE =================
 const firebaseConfig = {
     apiKey: "AIzaSyAarFKJOQ9RVzMQp0mcEmtJfFkHESPxiRQ",
     authDomain: "point-toktok-d66e4.firebaseapp.com",
@@ -69,14 +17,37 @@ const ADMIN_EMAIL = "hunjun032@gmail.com";
 
 let myData = null;
 
-// ================= AUTH =================
+// ----------------------
+// UI CONTROL (로딩/로그인/앱)
+// ----------------------
+
+const loading = document.getElementById("loading-screen");
+const login = document.getElementById("login-page");
+const app = document.getElementById("app-layout");
+
+function showApp(){
+    loading.classList.add("hidden");
+    login.classList.add("hidden");
+    app.classList.remove("hidden");
+}
+
+function showLogin(){
+    loading.classList.add("hidden");
+    login.classList.remove("hidden");
+    app.classList.add("hidden");
+}
+
+// ----------------------
+// AUTH (구글 로그인 ONLY)
+// ----------------------
+
+auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
 auth.onAuthStateChanged(async(user)=>{
 
     if(user){
-        document.getElementById("login-page").classList.add("hidden");
-        document.getElementById("app-layout").classList.remove("hidden");
-
         await initUser(user);
+        showApp();
 
         loadMissions();
         loadProducts();
@@ -84,21 +55,29 @@ auth.onAuthStateChanged(async(user)=>{
         loadNotice();
 
     } else {
-        document.getElementById("login-page").classList.remove("hidden");
-        document.getElementById("app-layout").classList.add("hidden");
+        showLogin();
     }
 
 });
 
-function login(){
-    auth.signInWithPopup(provider);
+async function login(){
+    try{
+        await auth.signInWithPopup(provider);
+    } catch(e){
+        alert("로그인 실패: " + e.message);
+    }
 }
 
-function logout(){
-    auth.signOut();
+async function logout(){
+    if(confirm("로그아웃?")){
+        await auth.signOut();
+    }
 }
 
-// ================= USER =================
+// ----------------------
+// USER INIT
+// ----------------------
+
 async function initUser(user){
 
     const ref = db.collection("users").doc(user.uid);
@@ -108,41 +87,68 @@ async function initUser(user){
 
     if(!snap.exists){
         await ref.set({
-            name: user.displayName || "user",
+            name: user.displayName || "회원",
             email: user.email,
             points: 0,
-            isAdmin,
+            status: "active",
+            isAdmin: isAdmin,
             lastAttendance: ""
         });
     }
 
     ref.onSnapshot(doc=>{
+
         myData = doc.data();
 
+        if(!myData) return;
+
+        if(myData.status === "blocked" && !myData.isAdmin){
+            alert("차단된 계정입니다.");
+            auth.signOut();
+            return;
+        }
+
         document.getElementById("point-text").innerText =
-            (myData.points || 0) + " P";
+        (myData.points || 0).toLocaleString() + " P";
+
+        if(myData.isAdmin){
+            document.getElementById("nav-admin").classList.remove("hidden");
+            document.getElementById("add-mission-btn").classList.remove("hidden");
+            document.getElementById("add-product-btn").classList.remove("hidden");
+            loadUsers();
+            loadExchangeList();
+        }
+
     });
 }
 
-// ================= ATTENDANCE =================
+// ----------------------
+// ATTENDANCE
+// ----------------------
+
 function attendance(){
 
-    const today = new Date().toLocaleDateString();
+    if(!myData) return;
+
+    const today = new Date().toDateString();
 
     if(myData.lastAttendance === today){
-        alert("이미 출석했음");
+        alert("이미 출석 완료!");
         return;
     }
 
-    db.collection("users")
-    .doc(auth.currentUser.uid)
-    .update({
+    db.collection("users").doc(auth.currentUser.uid).update({
         points: firebase.firestore.FieldValue.increment(100),
         lastAttendance: today
     });
+
+    alert("출석 완료 +100P 🎉");
 }
 
-// ================= MISSIONS =================
+// ----------------------
+// MISSIONS
+// ----------------------
+
 function loadMissions(){
 
     db.collection("missions")
@@ -152,18 +158,40 @@ function loadMissions(){
         const list = document.getElementById("mission-list");
         list.innerHTML = "";
 
+        if(snap.empty){
+            list.innerHTML = `<div class="soft-card p-6 text-center text-gray-300 font-black">미션 없음</div>`;
+            return;
+        }
+
         snap.forEach(doc=>{
 
             const m = doc.data();
+            const id = doc.id;
 
             list.innerHTML += `
-            <div>
-                <b>${m.title}</b> (+${m.points})
-                ${myData?.isAdmin ? `
-                    <button onclick="deleteMission('${doc.id}')">삭제</button>
-                ` : ""}
-            </div>
-            `;
+            <div class="soft-card p-6 flex justify-between items-center">
+
+                <div>
+                    <div class="font-black text-lg">${m.title}</div>
+                    <div class="text-gray-400 text-sm">+${m.points}P</div>
+                </div>
+
+                <div class="flex gap-2 items-center">
+
+                    <div class="bg-yellow-400 text-white px-4 py-2 rounded-2xl font-black">
+                        +${m.points}P
+                    </div>
+
+                    ${myData?.isAdmin ? `
+                        <button onclick="deleteMission('${id}')"
+                        class="bg-red-500 text-white px-3 py-2 rounded-xl text-sm font-black">
+                        삭제
+                        </button>
+                    ` : ""}
+
+                </div>
+
+            </div>`;
         });
 
     });
@@ -171,22 +199,29 @@ function loadMissions(){
 
 function addMission(){
 
-    const title = prompt("미션");
-    const points = prompt("포인트");
+    const title = prompt("미션 이름");
+    if(!title) return;
+
+    const points = Number(prompt("포인트"));
 
     db.collection("missions").add({
         title,
-        points:Number(points),
-        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+        points,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+
 }
 
 function deleteMission(id){
-    if(!confirm("삭제?")) return;
-    db.collection("missions").doc(id).delete();
+    if(confirm("삭제?")){
+        db.collection("missions").doc(id).delete();
+    }
 }
 
-// ================= PRODUCTS =================
+// ----------------------
+// PRODUCTS
+// ----------------------
+
 function loadProducts(){
 
     db.collection("products")
@@ -197,46 +232,60 @@ function loadProducts(){
         list.innerHTML = "";
 
         snap.forEach(doc=>{
+
             const p = doc.data();
 
             list.innerHTML += `
-            <div>
-                ${p.name} (${p.point}P)
-            </div>
-            `;
+            <div class="soft-card p-6">
+
+                <div class="flex justify-between items-center">
+
+                    <div>
+                        <div class="font-black text-xl">${p.name}</div>
+                        <div class="text-pink-500 font-black">${p.point}P</div>
+                    </div>
+
+                    <button onclick="exchange('${p.name}',${p.point})"
+                    class="bg-pink-500 text-white px-4 py-2 rounded-xl font-black">
+                        교환
+                    </button>
+
+                </div>
+
+            </div>`;
         });
 
     });
 }
 
-function addProduct(){
+async function exchange(name,point){
 
-    const name = prompt("상품");
-    const point = prompt("포인트");
-
-    db.collection("products").add({
-        name,
-        point:Number(point),
-        createdAt:firebase.firestore.FieldValue.serverTimestamp()
-    });
-}
-
-// ================= EXCHANGE =================
-function exchangeProduct(name, point){
-
-    if(myData.points < point){
-        alert("부족");
+    if((myData.points||0) < point){
+        alert("포인트 부족");
         return;
     }
 
-    db.collection("users")
-    .doc(auth.currentUser.uid)
-    .update({
+    if(!confirm("교환?")) return;
+
+    await db.collection("users").doc(auth.currentUser.uid).update({
         points: firebase.firestore.FieldValue.increment(-point)
     });
+
+    await db.collection("exchanges").add({
+        uid: auth.currentUser.uid,
+        userName: myData.name,
+        product: name,
+        point,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    alert("교환 완료 🎁");
 }
 
-// ================= RANKING =================
+// ----------------------
+// RANKING
+// ----------------------
+
 function loadRanking(){
 
     db.collection("users")
@@ -247,34 +296,102 @@ function loadRanking(){
         const list = document.getElementById("ranking-list");
         list.innerHTML = "";
 
-        let i = 1;
+        let r = 1;
 
         snap.forEach(doc=>{
+
             const u = doc.data();
 
             list.innerHTML += `
-            <div>
-                ${i++}위 ${u.name} - ${u.points}
-            </div>
-            `;
+            <div class="soft-card p-4 flex justify-between">
+                <div>${r++}위 ${u.name}</div>
+                <div class="text-pink-500 font-black">${u.points}P</div>
+            </div>`;
         });
 
     });
 }
 
-// ================= NOTICE =================
+// ----------------------
+// NOTICE
+// ----------------------
+
 function loadNotice(){
 
-    db.collection("settings")
-    .doc("notice")
+    db.collection("settings").doc("notice")
     .onSnapshot(doc=>{
-        document.getElementById("notice-area").innerText =
-        doc.exists ? doc.data().text : "공지 없음";
-    });
 
+        const el = document.getElementById("notice-area");
+
+        if(!doc.exists){
+            el.innerText = "공지 없음";
+            return;
+        }
+
+        el.innerText = doc.data().text;
+    });
 }
 
-</script>
+function setNotice(){
 
-</body>
-</html>
+    const text = prompt("공지");
+    if(!text) return;
+
+    db.collection("settings").doc("notice").set({text});
+}
+
+// ----------------------
+// ADMIN USERS
+// ----------------------
+
+function loadUsers(){
+
+    db.collection("users")
+    .onSnapshot(snap=>{
+
+        const list = document.getElementById("user-list");
+        list.innerHTML = "";
+
+        snap.forEach(doc=>{
+
+            const u = doc.data();
+            const id = doc.id;
+
+            list.innerHTML += `
+            <div class="soft-card p-6">
+
+                <div class="flex justify-between">
+
+                    <div>
+                        <div class="font-black">${u.name}</div>
+                        <div class="text-gray-400 text-xs">${u.email}</div>
+                    </div>
+
+                    <div class="text-pink-500 font-black">
+                        ${u.points}P
+                    </div>
+
+                </div>
+
+            </div>`;
+        });
+
+    });
+}
+
+// ----------------------
+// TAB
+// ----------------------
+
+function switchTab(tab){
+
+    ["home","shop","admin"].forEach(t=>{
+        document.getElementById("tab-"+t).classList.add("hidden");
+        document.getElementById("nav-"+t).classList.remove("active-nav");
+    });
+
+    document.getElementById("tab-"+tab).classList.remove("hidden");
+    document.getElementById("nav-"+tab).classList.add("active-nav");
+
+    window.scrollTo(0,0);
+}
